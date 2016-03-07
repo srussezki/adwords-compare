@@ -19,7 +19,7 @@ try {
 }
 
 // csv file configuration
-var csvSettings = {delimiter: ",", quote: '"'};
+var csvSettings = {delimiter: "\t", quote: '"'};
 
 // configuration for entities
 // the identifiers property is responsible for building a unique identifying key, which is the key for comaprison

@@ -4,7 +4,7 @@
   "description": "Compares two different csv files and provides the diff as result",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node index.js test1.csv test2.csv",
     "start": "node index.js"
   },
   "author": "",

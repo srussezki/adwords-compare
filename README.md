@@ -3,17 +3,20 @@
 ## TL;DR
 This nodejs script is is meant to be a comparison script for hierarchical structures stored in csv format - such as Google AdWords exports.
 
-There is no entitlement to completeness, accurateness or performance, as another purpose of writing this script was to get familiar with nodejs.
+There is no entitlement to completeness, accurateness or performance, as another purpose of writing this script for me was to get familiar with nodejs.
 
 ## How to install?
-$ npm install
+```
+ $ npm install
+```
 
 ## How to run?
-  $ node index.js test1.csv test2.csv # with node
-  $ npm start test1.csv test2.csv # with npm
-  $
-  $ npm test # for running an example
-
+```
+ $ node index.js test1.csv test2.csv # with node
+ $ npm start test1.csv test2.csv # with npm
+ $
+ $ npm test # for running an example
+```
 ## Output
  - change indicator
  - affected entity type [affected entity attribute (optional)]

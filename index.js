@@ -1,15 +1,20 @@
-var Converter = require("csvtojson").Converter,
-    $ = require('jquery-deferred'),
+var $ = require('jquery-deferred'),
     printf = require('printf'),
     _ = require('lodash'),
     config = require('./config.js'),
+    utils = require('./utils.js'),
     fs = require('fs');
 
 // some validation
 var args = process.argv.slice(2),
     fileOne = args[args.length-2],
     fileTwo = args[args.length-1],
-    outputFile;
+    outputFile,
+    silent = true;
+
+// mapping configuration
+var entityMappingOne = config.entityMapping,
+    entityMappingTwo = (config.alternativeMapping === true ? config.entityMappingAlternative : null) || entityMappingOne;
 
 
 for (var i = 0; i < args.length; i+=2) {
@@ -25,6 +30,10 @@ for (var i = 0; i < args.length; i+=2) {
       outputFile = args[i+1];
       fs.writeFile(outputFile, 'DIFF\tLOCATION\tKEY\tDIFF\n');
       break;
+    case '-v':
+      silent = false;
+      i--; // without value
+      break;
   }
 }
 
@@ -38,25 +47,80 @@ try {  fs.statSync(fileTwo, function() {})  } catch (e) {
   console.error("ERROR: file " + fileTwo + " could not be found"); return;
 }
 
-var checkedCounters = {},
-    unparsedRows = 0;
+var stats = {};
 
 /**
  * reads a whole CSV file
  * @return {object} $.Deferred()
  */
-function readFile(fileName) {
-  var def = $.Deferred();
+function readFile(fileName, cfg) {
+  var def = $.Deferred(),
+      lineReader = require('readline').createInterface({
+        input: require('fs').createReadStream(fileName)
+      }),
+      obj,
+      existentObj,
+      data = {},
+      values,
+      headers,
+      i,
+      lineNumber = 0,
+      mappedCount = 0,
+      delimiter = config.defaultCsvSettings.delimiter || ',',
+      quote = config.defaultCsvSettings.quote || '"',
+      trimBoth = function(string) {
+        if(string[0] === quote && string[string.length - 1] === quote) {
+          string = string.substr(1, string.length - 2);
+        }
+        else if(string[0] === quote) {
+          string = string.substr(1, string.lenght);
+        }
+        else if(string[string.length-1] === quote) {
+          string = string.substr(0, string.length - 1);
+        }
+        return string.replace(quote + quote, quote);
+      },
+      assignToData = function(entity) {
+        if(!data.hasOwnProperty(entity.type)) {
+          data[entity.type] = {};
+        }
+        existentObj = data[entity.type][entity.key];
+        if(!existentObj) {
+          existentObj = {};
+          mappedCount++;
+        }
 
-  require("fs")
-    .createReadStream(fileName)
-    .pipe(
-      new Converter(config.defaultCsvSettings)
-        .on("end_parsed", function (data) {
-            console.log(data.length + ' entities read from file ' + fileName);
-            def.resolve(data);
-        })
-    );
+        data[entity.type][entity.key] = Object.assign(existentObj, entity.data);
+      };
+
+  lineReader.on('line', function (line) {
+    lineNumber++;
+    values = line.trim().split(delimiter).map(trimBoth);
+
+    if(!headers) {
+      headers = values;
+    } else {
+      // assign to obj
+      obj = {};
+      for (i = 0; i < headers.length; i++) {
+        if(values[i] && values[i].length > 0) {
+          obj[ headers[i] ] = values[i];
+        }
+      }
+
+      parseFromRow(obj, cfg).map(assignToData);
+    }
+  });
+
+  lineReader.on('close', function(){
+    console.log('finished reading file ' + fileName + ' with '+ mappedCount + ' mapped entities' );
+
+    if(mappedCount === 0) {
+      def.reject("no entites found in file " + fileName);
+    }
+
+    def.resolve(data);
+  })
 
   return def;
 }
@@ -115,49 +179,37 @@ function parseEntity (entityType, data, extendObj, cfg) {
           }
       });
 
-      return typeof extendObj === 'object' ? Object.assign(extendObj, entityData) : entityData;
+      return extendObj && typeof extendObj === 'object' ? Object.assign(extendObj, entityData) : entityData;
     }
 }
 
 /**
- * parses all objects to entities
- * @param  {array} data rows read from csv files
- * @return {object} keys according to configuration (keywords, ads, ..), values parsed entities from @data
+ * parses all objects to entities from one row
+ * @param  {object} rowData
+ * @param  {object} cfg mapping configuration
+ * @return {array} an array of all mapped entities
  */
-function parseAll(data, cfg) {
-  console.log('start parsing');
-
+function parseFromRow(rowData, cfg) {
   var identifierNames = Object.keys(cfg),
+      result = [],
       identifierName,
-      record,
-      result = {},
-      entityData,
       entityKey,
-      isParsed;
+      entityData;
 
-  // init
-  identifierNames.forEach(identifierName => {result[identifierName] = {}});
+  for (var j = 0; j < identifierNames.length; j++) {
+    identifierName = identifierNames[j],
+    entityKey = getIdKey(identifierName, rowData, cfg),
+    entityData = parseEntity(identifierName, rowData, null, cfg );
 
-  for (var i = 0; i < data.length; i++) {
-    record = data[i];
-    isParsed = false;
-
-    for (var j = 0; j < identifierNames.length; j++) {
-      identifierName = identifierNames[j];
-      entityKey = getIdKey(identifierName, record, cfg);
-
-      if( entityKey && (entityData = parseEntity(identifierName, record, result[identifierName][entityKey], cfg )) ) {
-        result[identifierName][entityKey] = entityData;
-        isParsed = true;
-      }
-    }
-
-    if(!isParsed) {
-      unparsedRows++;
+    if( entityKey && entityData ) {
+      result.push({
+        key: entityKey,
+        type: identifierName,
+        data: entityData
+      });
     }
   }
 
-  console.log('finished parsing with', Object.keys(result));
   return result;
 }
 
@@ -172,6 +224,8 @@ function compareAll(one, two) {
   types.forEach(type => {
       compareByType(one[type], two[type], type);
   });
+
+  return $.Deferred().resolve();
 }
 
 /**
@@ -187,11 +241,7 @@ function compareByType(one, two, type) {
   var CHANGE = config.changeIndicators,
       entityKeys = _.uniq(Object.keys(one).concat(Object.keys(two)));
 
-  checkedCounters[type] = 0; // init counter
-
  entityKeys.forEach( entityKey => {
-    checkedCounters[type]++;
-
     if(one.hasOwnProperty(entityKey) ? !two.hasOwnProperty(entityKey) : two.hasOwnProperty(entityKey)) {
       var operator = one.hasOwnProperty(entityKey) ? CHANGE.DELETED : CHANGE.NEW;
       handleDiff(operator, type, entityKey);
@@ -239,9 +289,13 @@ function compareByAttributes(one, two, type, entityKey) {
 function handleDiff(diffSymbol, location, key, text) {
   if(outputFile) {
     fs.appendFile(outputFile, diffSymbol + '\t' + location + '\t' + key + '\t' + (text||'') + '\n');
-  } else {
+  }
+  else if(!silent) {
     console.log(printf('\t%s  %-40s: "%s":\t%s', diffSymbol, location, key, text || ''));
   }
+
+  stats[location] = stats[location] || {};
+  stats[location][diffSymbol] = (stats[location][diffSymbol] || 0) + 1;
 }
 
 
@@ -249,30 +303,44 @@ function handleDiff(diffSymbol, location, key, text) {
 //  STARTS EXECUTION
 var startTime = Date.now();
 
-$.when(readFile(fileOne), readFile(fileTwo))
+$.when(readFile(fileOne, entityMappingOne), readFile(fileTwo, entityMappingTwo))
   .then((dataOne, dataTwo)=>{
-    var entityMapping = config.entityMapping,
-        alternativeMapping = (config.alternativeMapping === true ? config.entityMappingAlternative : null) || entityMapping;
-
-    compareAll(
-      parseAll(dataOne, config.entityMapping),
-      parseAll(dataTwo, alternativeMapping)
-    )
+    compareAll(dataOne, dataTwo);
   })
-  .fail(err => console.log("ERROR", err))
-  .always(()=>{
-    console.log("script runtime: " + (Date.now() - startTime) + 'ms');
-    console.log("checked: ", JSON.stringify(checkedCounters, null, "\t"));
-    if(unparsedRows > 0) {
-      var txt = 'WARNING!!! ' + unparsedRows + ' ROWS COULD NOT BE PARSED';
-      console.log('\t' + '-'.repeat(txt.length));
-      console.log('\t' + txt);
-      console.log('\t' + '-'.repeat(txt.length));
-    }
-
+  .then(()=>{
     if(outputFile) {
       console.log('THE RESULTS WERE EXPORTED TO: ' + outputFile)
     }
+
+    var summary =  [],
+        summarySort = function(a, b) {
+            return (b.count != a.count) ? b.count - a.count : (a.type > b.type ? 1 : -1);
+        };
+    Object.keys(stats).forEach(type => {
+      Object.keys(stats[type]).forEach(diff => {
+        summary.push({
+          description: printf('%-40s %-5s %d', type, diff, stats[type][diff]),
+          type: type,
+          diff: diff,
+          count: stats[type][diff]
+        });
+      });
+    });
+
+    if(summary.length === 0) {
+      utils.printInBox("THE FILES ARE EQUAL");
+    } else {
+      console.log('SUMMARY');
+      console.log(summary.sort(summarySort).map(itm => "\t"+itm.description+"\n").join(''));
+      if(silent) {
+        console.log("FOR MORE INFORMATION RUN THE SCRIPT WITH -v PARAMETER OR OUTPUT TO A FILE WITH -o <filename>");
+      }
+      utils.printInBox("THE FILES ARE DIFFERENT");
+    }
+  })
+  .fail(err => console.log("ERROR", err))
+  .always(()=>{
+    console.log("SCRIPT RUNTIME: " + (Date.now() - startTime) + 'ms');
   });
 
 

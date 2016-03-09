@@ -68,7 +68,7 @@ Both files have to be UTF8 encoded.
 ## Optional Parameters
  - -o outputfile
  - -d delimiter for csv file
- - -q quotation for csv file
+ - -v verbouse mode
 
 ## Configuration
 The default configuration is defined in `config.js`.
